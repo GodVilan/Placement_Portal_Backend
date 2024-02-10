@@ -27,7 +27,7 @@ const __dirname = path.dirname(__filename);
 config();
 
 const app = express();
-app.use(cors({ origin: 'https://placement-portal-college.onrender.com' }));
+app.use(cors());
 const upload = multer();
 app.use(bodyParser.json());
 
