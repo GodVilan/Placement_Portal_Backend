@@ -18,11 +18,7 @@ import os from "os";
 import { spawn } from 'child_process';
 import fs from 'fs';
 import validator from 'validator';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
+import stdProjectModel from "./models/stdProjectModel.js";
 
 config();
 
@@ -30,10 +26,10 @@ const app = express();
 app.use(cors());
 const upload = multer();
 app.use(bodyParser.json());
-
 app.use(express.json());
 
 const port = process.env.PORT || 5010;
+
 app.get('/', async (req, res) => {
   res.json("Backend");
 });
@@ -365,13 +361,13 @@ app.post('/api/compileAndRun', (req, res) => {
 });
 
 app.post('/api/submit', async (req, res) => {
-  const { uid, problemId, problemName, code, language, testCases } = req.body; // Include language
+  const { uid, problemId, problemName, code, language, testCases } = req.body;
   let status = 'Accepted';
   for (let i = 0; i < testCases.length; i++) {
     const { input, output: expectedOutput } = testCases[i];
     try {
       const output = await compileAndRun(code, language, input);
-      if (output === 'Compilation error' || output === 'Runtime error' || output === 'Unsupported language') {
+      if (output === 'Compilation error' || output === 'Runtime error' || output === 'Unsupported language' || output === 'TLE: Time Limit Exceeded') {
         status = output;
         break;
       }
@@ -411,7 +407,20 @@ app.post('/api/submit', async (req, res) => {
 
 function compileAndRun(code, language, input) {
   return new Promise((resolve, reject) => {
+    const timeLimit = 5000;
     let process;
+    let timer;
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (process) process.kill();
+    };
+
+    const handleTimeout = () => {
+      cleanup();
+      resolve('TLE: Time Limit Exceeded');
+    };
+
     if (language === 'python') {
       process = spawn('python', ['-c', code]);
     } else if (language === 'java') {
@@ -419,10 +428,12 @@ function compileAndRun(code, language, input) {
       const compile = spawn('javac', ['Main.java']);
       compile.on('close', (code) => {
         if (code !== 0) {
+          cleanup();
           resolve('Compilation error');
           return;
         }
         process = spawn('java', ['Main']);
+        timer = setTimeout(handleTimeout, timeLimit);
         runProcess(process, input, resolve, reject);
       });
       return;
@@ -431,18 +442,21 @@ function compileAndRun(code, language, input) {
       const compile = spawn('g++', ['main.cpp', '-o', 'main']);
       compile.on('close', (code) => {
         if (code !== 0) {
-          console.log(code);
+          cleanup();
           resolve('Compilation error');
           return;
         }
         process = spawn('./main');
+        timer = setTimeout(handleTimeout, timeLimit);
         runProcess(process, input, resolve, reject);
       });
       return;
     } else {
+      cleanup();
       resolve('Unsupported language');
       return;
     }
+    timer = setTimeout(handleTimeout, timeLimit);
     runProcess(process, input, resolve, reject);
   });
 }
@@ -498,11 +512,67 @@ app.get('/api/submissions', async (req, res) => {
   }
 });
 
-// app.use(express.static(path.join(__dirname, "./client/build")));
+app.get('/get-projects/:uid', async (req, res) => {
+  try {
+      const projects = await stdProjectModel.findOne({ uid: req.params.uid });
+      if (!projects) {
+          return res.send({ message: 'No Projects' });
+      }
+      res.send(projects);
+  } catch (err) {
+      res.status(500).send({ error: 'Something went wrong' });
+  }
+});
 
-// app.get("*", function (req, res) {
-//   res.sendFile(path.join(__dirname, "./client/build/index.html"));
-// });
+app.post('/add-project/:uid', async (req, res) => {
+  try {
+      let project = await stdProjectModel.findOne({ uid: req.params.uid });
+      if (!project) {
+          project = new stdProjectModel({
+              uid: req.params.uid,
+              projectTitle: [req.body.projectTitle],
+              projectObj: [req.body.projectObj],
+              projectURL: [req.body.projectURL]
+          });
+      } else {
+          project.projectTitle.push(req.body.projectTitle);
+          project.projectObj.push(req.body.projectObj);
+          project.projectURL.push(req.body.projectURL);
+      }
+      await project.save();
+      res.send(project);
+  } catch (err) {
+      res.status(500).send({ error: 'Something went wrong' });
+  }
+});
+
+app.delete('/delete-project/:uid', async (req, res) => {
+  try {
+      const { uid } = req.params;
+      const { projectTitle, projectObj, projectURL } = req.body;
+
+      const project = await stdProjectModel.findOne({ uid: uid });
+      if (!project) {
+          return res.status(404).send({ message: 'No Project Found' });
+      }
+
+      const indexTitle = project.projectTitle.indexOf(projectTitle);
+      const indexObj = project.projectObj.indexOf(projectObj);
+      const indexURL = project.projectURL.indexOf(projectURL);
+
+      if (indexTitle !== -1 && indexObj !== -1 && indexURL !== -1) {
+          project.projectTitle.splice(indexTitle, 1);
+          project.projectObj.splice(indexObj, 1);
+          project.projectURL.splice(indexURL, 1);
+          await project.save();
+          res.send({ message: 'Project deleted' });
+      } else {
+          res.status(404).send({ message: 'Project not found' });
+      }
+  } catch (err) {
+      res.status(500).send({ error: 'Something went wrong' });
+  }
+});
 
 const uri = process.env.MONGO_DB;
 
