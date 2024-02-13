@@ -30,6 +30,10 @@ app.use(express.json());
 
 const port = process.env.PORT || 5010;
 
+app.get('/', async (req, res) => {
+  res.json("Backend");
+});
+
 app.post('/', async (req, res) => {
     const { uid, password } = req.body;
 
