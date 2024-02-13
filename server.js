@@ -30,10 +30,6 @@ app.use(express.json());
 
 const port = process.env.PORT || 5010;
 
-app.get('/', async (req, res) => {
-  res.json("Backend");
-});
-
 app.post('/', async (req, res) => {
     const { uid, password } = req.body;
 
@@ -367,12 +363,12 @@ app.post('/api/submit', async (req, res) => {
     const { input, output: expectedOutput } = testCases[i];
     try {
       const output = await compileAndRun(code, language, input);
-      if (output === 'Compilation error' || output === 'Runtime error' || output === 'Unsupported language' || output === 'TLE: Time Limit Exceeded') {
-        status = output;
+      if (output.includes('Error')) {
+        status = "Compile/Runtime Error";
         break;
       }
-      if (!checkOutput(output, expectedOutput)) {
-        status = 'Wrong Answer';
+      if(!checkOutput(output, expectedOutput)) {
+        status = "Wrong Answer";
         break;
       }
     } catch (error) {
@@ -402,14 +398,35 @@ app.post('/api/submit', async (req, res) => {
       await newStudent.save();
     }  
   }
-  res.json({ message: `Submission ${status}` });
+  res.json({ message: `${status}` });
 });
 
-function compileAndRun(code, language, input) {
+const javaKeywords = ['abstract', 'assert', 'boolean', 'break', 'byte', 'case', 'catch', 'char', 'class', 'const', 'continue', 'default', 'do', 'double', 'else', 'enum', 'extends', 'final', 'finally', 'float', 'for', 'goto', 'if', 'implements', 'import', 'instanceof', 'int', 'interface', 'long', 'native', 'new', 'package', 'private', 'protected', 'public', 'return', 'short', 'static', 'strictfp', 'super', 'switch', 'synchronized', 'this', 'throw', 'throws', 'transient', 'try', 'void', 'volatile', 'while'];
+// const pythonKeywords = ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield'];
+const cppKeywords = ['alignas', 'alignof', 'and', 'and_eq', 'asm', 'auto', 'bitand', 'bitor', 'bool', 'break', 'case', 'catch', 'char', 'char8_t', 'char16_t', 'char32_t', 'class', 'compl', 'concept', 'const', 'consteval', 'constexpr', 'constinit', 'const_cast', 'continue', 'co_await', 'co_return', 'co_yield', 'decltype', 'default', 'delete', 'do', 'double', 'dynamic_cast', 'else', 'enum', 'explicit', 'export', 'extern', 'false', 'float', 'for', 'friend', 'goto', 'if', 'inline', 'int', 'long', 'mutable', 'namespace', 'new', 'noexcept', 'not', 'not_eq', 'nullptr', 'operator', 'or', 'or_eq', 'private', 'protected', 'public', 'register', 'reinterpret_cast', 'requires', 'return', 'short', 'signed', 'sizeof', 'static', 'static_assert', 'static_cast', 'struct', 'switch', 'synchronized', 'template', 'this', 'thread_local', 'throw', 'true', 'try', 'typedef', 'typeid', 'typename', 'union', 'unsigned', 'using', 'virtual', 'void', 'volatile', 'wchar_t', 'while', 'xor', 'xor_eq'];
+
+function compileAndRun(code, language, input) { 
+  let codeKeywords;
+  if (language === 'java') {
+    codeKeywords = javaKeywords;
+    if (!codeKeywords.some(keyword => code.includes(keyword))) {
+      return Promise.resolve('Invalid Code');
+    }
+  } else if (language === 'python') {
+    codeKeywords = [];
+  } else if (language === 'cpp') {
+    codeKeywords = cppKeywords;
+    if (!codeKeywords.some(keyword => code.includes(keyword))) {
+      return Promise.resolve('Invalid Code');
+    }
+  }
+
+
   return new Promise((resolve, reject) => {
     const timeLimit = 5000;
     let process;
     let timer;
+    let errorOutput = '';
 
     const cleanup = () => {
       clearTimeout(timer);
@@ -423,13 +440,18 @@ function compileAndRun(code, language, input) {
 
     if (language === 'python') {
       process = spawn('python', ['-c', code]);
+      timer = setTimeout(handleTimeout, timeLimit);
+      runProcess(process, input, resolve, reject);
     } else if (language === 'java') {
       fs.writeFileSync('Main.java', code);
       const compile = spawn('javac', ['Main.java']);
+      compile.stderr.on('data', (data) => {
+        errorOutput += data;
+      });
       compile.on('close', (code) => {
         if (code !== 0) {
           cleanup();
-          resolve('Compilation error');
+          resolve(errorOutput);
           return;
         }
         process = spawn('java', ['Main']);
@@ -440,10 +462,13 @@ function compileAndRun(code, language, input) {
     } else if (language === 'cpp') {
       fs.writeFileSync('main.cpp', code);
       const compile = spawn('g++', ['main.cpp', '-o', 'main']);
+      compile.stderr.on('data', (data) => {
+        errorOutput += data;
+      });
       compile.on('close', (code) => {
         if (code !== 0) {
           cleanup();
-          resolve('Compilation error');
+          resolve(errorOutput);
           return;
         }
         process = spawn('./main');
@@ -463,24 +488,34 @@ function compileAndRun(code, language, input) {
 
 function runProcess(process, input, resolve, reject) {
   let output = '';
+  let errorOutput = '';
+
   process.stdout.on('data', (data) => {
     output += data;
   });
+
   process.stderr.on('data', (data) => {
-    resolve(data);
+    errorOutput += data;
   });
+
   process.on('close', (code) => {
     if (code !== 0) {
-      resolve('Runtime error');
+      resolve(errorOutput ? errorOutput : 'Runtime error');
       return;
     }
     resolve(output);
   });
+
   if (input) {
-    process.stdin.write(input);
+    process.stdin.write(input, () => {
+      process.stdin.end();
+    });
+  } else {
     process.stdin.end();
   }
 }
+
+
 
 function checkOutput(output, expectedOutput) {
   output = output.trim();
