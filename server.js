@@ -24,7 +24,12 @@ config();
 
 const app = express();
 app.use(cors());
-const upload = multer();
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 5 * 1024 * 1024,
+    },
+});
 app.use(bodyParser.json());
 app.use(express.json());
 
