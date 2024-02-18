@@ -14,17 +14,20 @@ import certificationModel from "./models/certificationModel.js";
 import resumeModel from "./models/resumeModel.js";
 import codeSubmissionModel from "./models/codeSubmission.js";
 import solCountModel from "./models/solCountModel.js";
-import os from "os";
 import { spawn } from 'child_process';
 import fs from 'fs';
-import validator from 'validator';
 import stdProjectModel from "./models/stdProjectModel.js";
 
 config();
 
 const app = express();
 app.use(cors());
-const upload = multer();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+      fileSize: 5 * 1024 * 1024,
+  },
+});
 app.use(bodyParser.json());
 app.use(express.json());
 
@@ -230,7 +233,6 @@ app.get('/StdInterests/get-stdinterest/:uid', async (req, res) => {
   }
 });
 
-
 app.post('/Apply/std', async (req, res) => {
   const { companyName, uid } = req.body;
   try {
@@ -251,21 +253,21 @@ app.post('/Apply/std', async (req, res) => {
   }
 });
 
-app.get('/StudentInterests/:companyName', async (req, res) => {
-  try {
+app.get('/AppliedStudents/:companyName', async(req,res)=>{
+  try{
     const companyName = req.params.companyName;
     const studentInterests = await stdinterestModel.findOne({ companyName: companyName });
     if (studentInterests) {
-      const pendingStudents = studentInterests.students.filter(student => student.status === 'pending');
-      res.json(pendingStudents);
+      res.json(studentInterests.students);
     } else {
       res.json([]);
     }
-  } catch (error) {
-    console.error(error);
+  }
+  catch(err){
+    console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
-});
+})
 
 app.get('/CompanyDetails/:company', async (req, res) => {
   try {
@@ -285,10 +287,19 @@ app.post('/api/updateStatus/:company', async (req, res) => {
     if (!stdInterest) {
       return res.json({ message: companyName });
     }
+
     let student = stdInterest.students.find(student => student.studentId === studentId);
+    if(!student){
+      stdInterest.students.push({ studentId: studentId, status: status });
+      await stdInterest.save();
+      res.json({message:`${status} Sucessfully`});
+    }
+    else{
     student.status = status;
+
     await stdInterest.save();
     res.json({ message: 'Status updated successfully' });
+    }
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -398,6 +409,23 @@ app.get('/AddCertifications/download-certification/:uid/:certificationName', asy
   } catch (err) {
     console.error(err);
     res.status(500).send('Server error');
+  }
+});
+app.post('/api/update-password', async (req, res) => {
+  const { uid, password } = req.body;
+
+  try {
+      const user = await loginModel.findOne({ uid: uid });
+      if (user) {
+          user.password = password;
+          await user.save();
+          res.sendStatus(200);
+      } else {
+          res.status(404).send('User not found');
+      }
+  } catch (error) {
+      console.error('Error:', error);
+      res.status(500).send('An error occurred while updating the password');
   }
 });
 
@@ -565,6 +593,8 @@ function runProcess(process, input, resolve, reject) {
     process.stdin.end();
   }
 }
+
+
 
 function checkOutput(output, expectedOutput) {
   output = output.trim();
